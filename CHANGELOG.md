@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.2.2] - 2026-04-23
+
+### Bug Fixes
+- Match ask/allow/deny bash rules against RTK-rewritten git and gh commands by normalizing `rtk git`, `rtk proxy git`, `rtk gh`, and leading env assignments.
+
+### Other
+- Keep user `!` / `!!` bash commands outside permission handling.
+- Add regression test for RTK-wrapped `git push` matching.
+
 ## [0.2.1] - 2026-04-23
 
 ### Other

@@ -136,12 +136,54 @@ function dedupe(values: string[]): string[] {
   return [...new Set(values.filter(Boolean))];
 }
 
+function stripLeadingEnvAssignments(command: string): string {
+  let rest = command.trimStart();
+
+  while (rest) {
+    const match = rest.match(/^([A-Za-z_][A-Za-z0-9_]*)=("(?:\\.|[^"])*"|'(?:\\.|[^'])*'|[^\s]+)\s*/);
+    if (!match) break;
+    rest = rest.slice(match[0].length).trimStart();
+  }
+
+  return rest;
+}
+
+function unwrapKnownBashWrappers(command: string): string[] {
+  const trimmed = command.trim();
+  const candidates = [trimmed];
+
+  const rtkGit = trimmed.match(/^rtk\s+git\s+(.+)$/i);
+  if (rtkGit?.[1]) candidates.push(`git ${rtkGit[1]}`);
+
+  const rtkProxyGit = trimmed.match(/^rtk\s+proxy\s+git\s+(.+)$/i);
+  if (rtkProxyGit?.[1]) candidates.push(`git ${rtkProxyGit[1]}`);
+
+  const rtkGh = trimmed.match(/^rtk\s+gh\s+(.+)$/i);
+  if (rtkGh?.[1]) candidates.push(`gh ${rtkGh[1]}`);
+
+  const rtkProxyGh = trimmed.match(/^rtk\s+proxy\s+gh\s+(.+)$/i);
+  if (rtkProxyGh?.[1]) candidates.push(`gh ${rtkProxyGh[1]}`);
+
+  return dedupe(candidates);
+}
+
+function bashTargetCandidates(command: string): string[] {
+  const trimmed = command.trim();
+  const withoutEnv = stripLeadingEnvAssignments(trimmed);
+  return dedupe([
+    trimmed,
+    withoutEnv,
+    ...unwrapKnownBashWrappers(trimmed),
+    ...unwrapKnownBashWrappers(withoutEnv),
+  ]);
+}
+
 export function toolTarget(event: { toolName: string; input: Record<string, any>; cwd: string }): RuleTarget {
   const { toolName, input, cwd } = event;
 
   if (toolName === "bash") {
     const command = String(input.command ?? "").trim();
-    return { primary: command, candidates: dedupe([command]) };
+    return { primary: command, candidates: bashTargetCandidates(command) };
   }
 
   if (["read", "write", "edit"].includes(toolName)) {
@@ -277,10 +319,86 @@ function showHelp(ctx: any, paths: { global: string; project: string }): void {
       "Config files:",
       `- Project: ${paths.project}`,
       `- Global: ${paths.global}`,
+      "Notes:",
+      "- Agent bash tool calls use tool_call hook",
+      "- User ! / !! bash commands are not affected by this extension",
     ].join("\n"),
     "info",
   );
 }
+
+async function promptForDecision(
+  ctx: any,
+  paths: { global: string; project: string },
+  sessionRules: SessionRules,
+  decision: MatchResult,
+  callText: string,
+  exactRule: string,
+): Promise<{ allow: boolean; blockReason?: string }> {
+  if (decision.action === "allow") return { allow: true };
+
+  if (decision.action === "deny") {
+    const reason = decision.rule
+      ? `Blocked by ${decision.source} deny rule: ${decision.rule}`
+      : `Blocked by ${decision.source} deny policy`;
+    return { allow: false, blockReason: `${reason}\nCall: ${callText}` };
+  }
+
+  if (!ctx.hasUI) {
+    return {
+      allow: false,
+      blockReason: [
+        `Blocked in non-interactive mode.`,
+        `Decision: ask`,
+        `Call: ${callText}`,
+        `Add allow rule: ${exactRule}`,
+        `Project config: ${paths.project}`,
+        `Global config: ${paths.global}`,
+      ].join("\n"),
+    };
+  }
+
+  const subtitle = decision.rule ? `Matched ${decision.source} ask rule: ${decision.rule}` : `Matched default action: ask`;
+  const choice = await ctx.ui.select(`Permission required\n\n${callText}\n\n${subtitle}`, [...CHOICES]);
+
+  if (choice === "Allow once") return { allow: true };
+
+  if (choice === "Allow for session") {
+    if (!sessionRules.allow.includes(exactRule)) sessionRules.allow.push(exactRule);
+    ctx.ui.notify(`Allowed for session: ${exactRule}`, "info");
+    return { allow: true };
+  }
+
+  if (choice === "Allow for project") {
+    appendRule(paths.project, "allow", exactRule);
+    ctx.ui.notify(`Allowed for project: ${exactRule}`, "info");
+    return { allow: true };
+  }
+
+  if (choice === "Allow globally") {
+    appendRule(paths.global, "allow", exactRule, DEFAULT_GLOBAL_CONFIG);
+    ctx.ui.notify(`Allowed globally: ${exactRule}`, "info");
+    return { allow: true };
+  }
+
+  if (choice === "Deny for session") {
+    if (!sessionRules.deny.includes(exactRule)) sessionRules.deny.push(exactRule);
+    return { allow: false, blockReason: `Blocked by session deny: ${exactRule}` };
+  }
+
+  if (choice === "Deny for project") {
+    appendRule(paths.project, "deny", exactRule);
+    return { allow: false, blockReason: `Blocked by project deny: ${exactRule}` };
+  }
+
+  if (choice === "Deny globally") {
+    appendRule(paths.global, "deny", exactRule, DEFAULT_GLOBAL_CONFIG);
+    return { allow: false, blockReason: `Blocked by global deny: ${exactRule}` };
+  }
+
+  return { allow: false, blockReason: "Cancelled by user" };
+}
+
 
 export function parseRuleMutationArgs(rawArgs: string): { action: PermissionAction; scope: "session" | "project" | "global"; rule: string } | null {
   const match = rawArgs.trim().match(/^(allow|ask|deny)\s+(session|project|global)\s+(.+)$/i);
@@ -394,75 +512,16 @@ export default function toolPermissionsExtension(pi: ExtensionAPI) {
     if (toolName === "tool_search") return undefined;
 
     const target = toolTarget({ toolName, input, cwd: ctx.cwd });
-
     const paths = buildPaths(ctx.cwd);
     const globalConfig = readConfig(paths.global, DEFAULT_GLOBAL_CONFIG);
     const projectConfig = readConfig(paths.project);
     const decision = evaluateRules(sessionRules, projectConfig, globalConfig, toolName, target);
     const callText = displayCall({ toolName, input, cwd: ctx.cwd });
     const exactRule = ruleFromCall({ toolName, input, cwd: ctx.cwd });
+    const prompt = await promptForDecision(ctx, paths, sessionRules, decision, callText, exactRule);
 
-    if (decision.action === "allow") return undefined;
-
-    if (decision.action === "deny") {
-      const reason = decision.rule
-        ? `Blocked by ${decision.source} deny rule: ${decision.rule}`
-        : `Blocked by ${decision.source} deny policy`;
-      return { block: true, reason: `${reason}\nCall: ${callText}` };
-    }
-
-    if (!ctx.hasUI) {
-      return {
-        block: true,
-        reason: [
-          `Blocked in non-interactive mode.`,
-          `Decision: ask`,
-          `Call: ${callText}`,
-          `Add allow rule: ${exactRule}`,
-          `Project config: ${paths.project}`,
-          `Global config: ${paths.global}`,
-        ].join("\n"),
-      };
-    }
-
-    const subtitle = decision.rule ? `Matched ${decision.source} ask rule: ${decision.rule}` : `Matched default action: ask`;
-    const choice = await ctx.ui.select(`Permission required\n\n${callText}\n\n${subtitle}`, [...CHOICES]);
-
-    if (choice === "Allow once") return undefined;
-
-    if (choice === "Allow for session") {
-      if (!sessionRules.allow.includes(exactRule)) sessionRules.allow.push(exactRule);
-      ctx.ui.notify(`Allowed for session: ${exactRule}`, "info");
-      return undefined;
-    }
-
-    if (choice === "Allow for project") {
-      appendRule(paths.project, "allow", exactRule);
-      ctx.ui.notify(`Allowed for project: ${exactRule}`, "info");
-      return undefined;
-    }
-
-    if (choice === "Allow globally") {
-      appendRule(paths.global, "allow", exactRule, DEFAULT_GLOBAL_CONFIG);
-      ctx.ui.notify(`Allowed globally: ${exactRule}`, "info");
-      return undefined;
-    }
-
-    if (choice === "Deny for session") {
-      if (!sessionRules.deny.includes(exactRule)) sessionRules.deny.push(exactRule);
-      return { block: true, reason: `Blocked by session deny: ${exactRule}` };
-    }
-
-    if (choice === "Deny for project") {
-      appendRule(paths.project, "deny", exactRule);
-      return { block: true, reason: `Blocked by project deny: ${exactRule}` };
-    }
-
-    if (choice === "Deny globally") {
-      appendRule(paths.global, "deny", exactRule, DEFAULT_GLOBAL_CONFIG);
-      return { block: true, reason: `Blocked by global deny: ${exactRule}` };
-    }
-
-    return { block: true, reason: "Cancelled by user" };
+    if (prompt.allow) return undefined;
+    return { block: true, reason: prompt.blockReason ?? "Cancelled by user" };
   });
+
 }

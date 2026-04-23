@@ -55,6 +55,19 @@ test("ruleMatches supports file path raw and absolute matching", () => {
   assert.equal(ruleMatches("write:/etc/*", "write", target), false);
 });
 
+test("bash target unwraps RTK git wrapper for matching", () => {
+  const target = toolTarget({
+    toolName: "bash",
+    input: { command: 'RTK_DB_PATH="/tmp/history.db" rtk git push' },
+    cwd: "/tmp/project",
+  });
+
+  assert.equal(target.candidates.includes('RTK_DB_PATH="/tmp/history.db" rtk git push'), true);
+  assert.equal(target.candidates.includes("rtk git push"), true);
+  assert.equal(target.candidates.includes("git push"), true);
+  assert.equal(ruleMatches("bash:git push", "bash", target), true);
+});
+
 test("evaluateRules uses deny before ask before allow within same source", () => {
   const target = toolTarget({
     toolName: "bash",

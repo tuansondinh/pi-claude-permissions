@@ -1,6 +1,6 @@
 {
   "name": "pi-claude-permissions",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Claude-style allow/deny/ask permission lists for Pi tool calls",
   "keywords": [
     "pi",

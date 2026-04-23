@@ -54,6 +54,8 @@ Wildcard `*` supported.
 ### Targets by tool
 
 - `bash` → command string
+  - for matching, extension also normalizes known RTK rewrites like `RTK_DB_PATH=... rtk git push` back to `git push`
+  - user `!` / `!!` bash commands are not affected; extension only gates agent tool calls
 - `read` / `write` / `edit` → `path`
 - `mcp` → tool name if `input.tool` exists, else forms like `connect:github`, `search:foo`, `describe:bar`
 - other tools → compact JSON of input
@@ -120,5 +122,7 @@ Session decisions live only in memory. Project/global decisions append rule to c
 
 - In non-interactive mode, `ask` becomes block.
 - File rules match both raw path and resolved absolute path.
+- Bash rules match normalized command candidates so common wrappers like RTK git rewrites still hit intended rules.
+- This extension only gates agent tool calls, not user `!` / `!!` shell commands.
 - If you want Claude-like behavior, keep `defaultAction: "ask"` and grow `allow` / `deny` over time.
 - If you want broad default allow with targeted prompts, set `defaultAction: "allow"` and use `ask` list.

@@ -1,6 +1,6 @@
 {
   "name": "pi-claude-permissions",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Claude-style allow/deny/ask permission lists for Pi tool calls",
   "keywords": [
     "pi",
@@ -31,12 +31,12 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/sonwork/pi-claude-permissions.git"
+    "url": "git+https://github.com/tuansondinh/pi-claude-permissions.git"
   },
   "bugs": {
-    "url": "https://github.com/sonwork/pi-claude-permissions/issues"
+    "url": "https://github.com/tuansondinh/pi-claude-permissions/issues"
   },
-  "homepage": "https://github.com/sonwork/pi-claude-permissions#readme",
+  "homepage": "https://github.com/tuansondinh/pi-claude-permissions#readme",
   "peerDependencies": {
     "@mariozechner/pi-coding-agent": ">=0.57.0"
   },

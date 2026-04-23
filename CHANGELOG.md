@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.2.1] - 2026-04-23
+
+### Other
+- Fix repository URL
+
 ## [0.2.0] - 2026-04-23
 
 ### Features

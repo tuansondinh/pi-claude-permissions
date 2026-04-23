@@ -1,0 +1,50 @@
+{
+  "name": "pi-claude-permissions",
+  "version": "0.1.0",
+  "description": "Claude-style allow/deny/ask permission lists for Pi tool calls",
+  "keywords": [
+    "pi",
+    "pi-package",
+    "pi-extension",
+    "pi-coding-agent",
+    "permissions",
+    "claude",
+    "allowlist",
+    "denylist",
+    "ask"
+  ],
+  "type": "module",
+  "scripts": {
+    "build": "npx --yes -p typescript@5.9.3 -p @types/node tsc --noEmit --target es2022 --module nodenext --moduleResolution nodenext --strict extensions/index.ts tests/*.test.ts",
+    "test": "npx --yes tsx tests/*.test.ts",
+    "check": "npm run build && npm run test"
+  },
+  "files": [
+    "extensions/",
+    "README.md",
+    "CHANGELOG.md"
+  ],
+  "pi": {
+    "extensions": [
+      "./extensions/index.ts"
+    ]
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sonwork/pi-claude-permissions.git"
+  },
+  "bugs": {
+    "url": "https://github.com/sonwork/pi-claude-permissions/issues"
+  },
+  "homepage": "https://github.com/sonwork/pi-claude-permissions#readme",
+  "peerDependencies": {
+    "@mariozechner/pi-coding-agent": ">=0.57.0"
+  },
+  "devDependencies": {
+    "@mariozechner/pi-coding-agent": "^0.69.0",
+    "@types/node": "^24.0.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.3"
+  },
+  "license": "MIT"
+}

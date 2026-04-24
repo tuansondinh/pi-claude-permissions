@@ -1,3 +1,5 @@
+/// <reference lib="es2022" />
+
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { getAgentDir } from "@mariozechner/pi-coding-agent";
@@ -7,6 +9,7 @@ type PermissionAction = "allow" | "ask" | "deny";
 
 interface PermissionConfig {
   defaultAction?: PermissionAction;
+  footerStatus?: boolean;
   allow?: string[];
   ask?: string[];
   deny?: string[];
@@ -86,6 +89,7 @@ export function sanitizeConfig(value: unknown): PermissionConfig {
       defaultAction === "allow" || defaultAction === "ask" || defaultAction === "deny"
         ? defaultAction
         : undefined,
+    footerStatus: typeof obj.footerStatus === "boolean" ? obj.footerStatus : undefined,
     allow: Array.isArray(obj.allow) ? obj.allow.filter((v): v is string => typeof v === "string") : [],
     ask: Array.isArray(obj.ask) ? obj.ask.filter((v): v is string => typeof v === "string") : [],
     deny: Array.isArray(obj.deny) ? obj.deny.filter((v): v is string => typeof v === "string") : [],
@@ -287,14 +291,12 @@ function displayCall(event: { toolName: string; input: Record<string, any>; cwd:
   return `${event.toolName} → ${target}`;
 }
 
-function updateStatus(
-  ctx: any,
-  enabled: boolean,
-  sessionRules: SessionRules,
-  projectConfig?: PermissionConfig,
-  globalConfig?: PermissionConfig,
-  sessionDefaultAction?: PermissionAction,
-): void {
+function updateStatus(ctx: any, enabled: boolean, showFooterStatus: boolean): void {
+  if (!showFooterStatus) {
+    ctx.ui.setStatus("claude-permissions", undefined);
+    return;
+  }
+
   const theme = ctx.ui.theme;
   if (!enabled) {
     ctx.ui.setStatus("claude-permissions", theme.fg("warning", "permissions:off"));
@@ -312,10 +314,12 @@ function showSummary(
   globalConfig: PermissionConfig,
   enabled: boolean,
   sessionDefaultAction?: PermissionAction,
+  footerStatusEnabled = true,
 ): void {
   const lines = [
     `Permissions: ${enabled ? "enabled" : "disabled"}`,
     `Session default: ${sessionDefaultAction ?? "(none)"}`,
+    `Footer status: ${footerStatusEnabled ? "enabled" : "disabled"}`,
     `Session allow/ask/deny: ${sessionRules.allow.length}/${sessionRules.ask.length}/${sessionRules.deny.length}`,
     `Project config: ${existsSync(paths.project) ? paths.project : "missing"}`,
     `Global config: ${existsSync(paths.global) ? paths.global : "missing"}`,
@@ -477,7 +481,7 @@ export default function toolPermissionsExtension(pi: ExtensionAPI) {
 
   function refreshStatus(ctx: any): void {
     const { globalConfig, projectConfig } = currentConfigs(ctx);
-    updateStatus(ctx, enabled, sessionRules, projectConfig, globalConfig, sessionDefaultAction);
+    updateStatus(ctx, enabled, projectConfig.footerStatus ?? globalConfig.footerStatus ?? true);
   }
 
   function setEnabled(ctx: any, next: boolean): void {
@@ -522,7 +526,7 @@ export default function toolPermissionsExtension(pi: ExtensionAPI) {
       return setMode(ctx, mode);
     }
 
-    showSummary(ctx, paths, sessionRules, projectConfig, globalConfig, enabled, sessionDefaultAction);
+    showSummary(ctx, paths, sessionRules, projectConfig, globalConfig, enabled, sessionDefaultAction, projectConfig.footerStatus ?? globalConfig.footerStatus ?? true);
   }
 
   const argumentCompletions = (prefix: string) => {
@@ -586,7 +590,7 @@ export default function toolPermissionsExtension(pi: ExtensionAPI) {
 
     enabled = true;
     sessionDefaultAction = undefined;
-    updateStatus(ctx, enabled, sessionRules, projectConfig, globalConfig, sessionDefaultAction);
+    updateStatus(ctx, enabled, projectConfig.footerStatus ?? globalConfig.footerStatus ?? true);
     ctx.ui.notify(`claude-permissions: default=${defaultAction}, tool_search allowed`, "info");
   });
 
@@ -604,7 +608,7 @@ export default function toolPermissionsExtension(pi: ExtensionAPI) {
     const callText = displayCall({ toolName, input, cwd: ctx.cwd });
     const exactRule = ruleFromCall({ toolName, input, cwd: ctx.cwd });
     const prompt = await promptForDecision(ctx, paths, sessionRules, decision, callText, exactRule);
-    updateStatus(ctx, enabled, sessionRules, projectConfig, globalConfig, sessionDefaultAction);
+    updateStatus(ctx, enabled, projectConfig.footerStatus ?? globalConfig.footerStatus ?? true);
 
     if (prompt.allow) return undefined;
     return { block: true, reason: prompt.blockReason ?? "Cancelled by user" };

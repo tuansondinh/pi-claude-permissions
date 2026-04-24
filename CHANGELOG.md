@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.1] - 2026-04-24
+
+### Features
+- Add `footerStatus` config option to hide permission footer status without disabling permission checks.
+
+### Bug Fixes
+- Add explicit ES2022 lib reference for extension TypeScript diagnostics.
+
 ## [0.3.0] - 2026-04-24
 
 ### Features

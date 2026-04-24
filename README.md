@@ -122,7 +122,13 @@ Argument-style aliases also work: `/permissions on`, `/permissions off`, `/permi
 
 ## Footer status
 
-Extension writes footer status via `ctx.ui.setStatus("claude-permissions", ...)`:
+Extension writes footer status via `ctx.ui.setStatus("claude-permissions", ...)` unless disabled in config:
+
+```json
+{
+  "footerStatus": false
+}
+```
 
 - `permissions:on` — checks enabled
 - `permissions:off` — checks disabled for current session

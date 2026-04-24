@@ -7,13 +7,12 @@ Standalone repo. Runtime gate only. Built to coexist with `pi-lazy-tools`.
 Design tuned after studying `claw-code` permission flow:
 - `deny` wins over `ask`, `ask` wins over `allow`
 - session rules override project rules override global rules
-- `tool_search` always allowed for `pi-lazy-tools` compatibility
 - `ask` falls back to block in non-interactive mode
 
 Built to work with `pi-lazy-tools`:
 - does **not** touch `setActiveTools`
 - does **not** replace `tool_search`
-- allows `tool_search` by default so agent can unlock tools
+- does not include `tool_search` defaults because it belongs to user-installed tool-search extensions
 
 ## Install
 
@@ -37,8 +36,8 @@ pi -e /absolute/path/to/pi-claude-permissions/extensions/index.ts
   4. fallback `defaultAction`
 - source precedence: project overrides global
 - action precedence inside each source: `deny` → `ask` → `allow`
-- default built-in allow: `tool_search`
-- default fallback: `ask`
+- no extension-specific built-in allow rules
+- default fallback: `allow`
 
 ## Rule format
 
@@ -68,9 +67,8 @@ Global file: `$(getAgentDir)/tool-permissions.json` in Pi terms, usually `~/.pi/
 
 ```json
 {
-  "defaultAction": "ask",
+  "defaultAction": "allow",
   "allow": [
-    "tool_search",
     "read:*",
     "ls",
     "grep",
@@ -111,12 +109,23 @@ Session decisions live only in memory. Project/global decisions append rule to c
 ## Commands
 
 - `/permissions` — show active config summary + paths
-- `/permissions clear-session` — clear in-memory session rules
-- `/permissions help` — show rule help
-- `/permissions allow <session|project|global> <rule>` — add allow rule
-- `/permissions ask <session|project|global> <rule>` — add ask rule
-- `/permissions deny <session|project|global> <rule>` — add deny rule
-- `/permissions remove <allow|ask|deny> <session|project|global> <rule>` — remove rule
+- `/permissions:on` — enable permission checks for current session
+- `/permissions:off` — disable permission checks for current session
+- `/permissions:ask` — set fallback mode to ask for current session
+- `/permissions:allow` — set fallback mode to allow for current session
+- `/permissions:deny` — set fallback mode to deny for current session
+- `/permissions:init` — create starter project config at `.pi/tool-permissions.json`
+- `/permissions:init force` — overwrite project config with starter config
+- `/permissions:help` — show rule help and config example
+
+Argument-style aliases also work: `/permissions on`, `/permissions off`, `/permissions mode ask`, `/permissions init`, `/permissions help`.
+
+## Footer status
+
+Extension writes footer status via `ctx.ui.setStatus("claude-permissions", ...)`:
+
+- `permissions:on` — checks enabled
+- `permissions:off` — checks disabled for current session
 
 ## Notes
 
@@ -124,5 +133,5 @@ Session decisions live only in memory. Project/global decisions append rule to c
 - File rules match both raw path and resolved absolute path.
 - Bash rules match normalized command candidates so common wrappers like RTK git rewrites still hit intended rules.
 - This extension only gates agent tool calls, not user `!` / `!!` shell commands.
-- If you want Claude-like behavior, keep `defaultAction: "ask"` and grow `allow` / `deny` over time.
-- If you want broad default allow with targeted prompts, set `defaultAction: "allow"` and use `ask` list.
+- Default behavior is broad allow with targeted prompts: `defaultAction: "allow"` plus `ask` / `deny` lists.
+- If you want stricter Claude-like behavior, set `defaultAction: "ask"` and grow `allow` / `deny` over time.

@@ -30,10 +30,17 @@ interface MatchResult {
 }
 
 const DEFAULT_GLOBAL_CONFIG: PermissionConfig = {
-  defaultAction: "ask",
-  allow: ["tool_search"],
+  defaultAction: "allow",
+  allow: [],
   ask: [],
   deny: [],
+};
+
+const STARTER_PROJECT_CONFIG: PermissionConfig = {
+  defaultAction: "allow",
+  allow: ["read:*", "grep", "find"],
+  ask: ["bash:*", "write:*", "edit:*", "mcp:*"],
+  deny: ["bash:rm -rf*", "bash:sudo *", "write:.env*", "edit:.env*"],
 };
 
 const CHOICES = [
@@ -152,17 +159,14 @@ function unwrapKnownBashWrappers(command: string): string[] {
   const trimmed = command.trim();
   const candidates = [trimmed];
 
+  const rtkProxy = trimmed.match(/^rtk\s+proxy\s+(\S+)(?:\s+(.+))?$/i);
+  if (rtkProxy?.[1]) candidates.push([rtkProxy[1], rtkProxy[2]].filter(Boolean).join(" "));
+
   const rtkGit = trimmed.match(/^rtk\s+git\s+(.+)$/i);
   if (rtkGit?.[1]) candidates.push(`git ${rtkGit[1]}`);
 
-  const rtkProxyGit = trimmed.match(/^rtk\s+proxy\s+git\s+(.+)$/i);
-  if (rtkProxyGit?.[1]) candidates.push(`git ${rtkProxyGit[1]}`);
-
   const rtkGh = trimmed.match(/^rtk\s+gh\s+(.+)$/i);
   if (rtkGh?.[1]) candidates.push(`gh ${rtkGh[1]}`);
-
-  const rtkProxyGh = trimmed.match(/^rtk\s+proxy\s+gh\s+(.+)$/i);
-  if (rtkProxyGh?.[1]) candidates.push(`gh ${rtkProxyGh[1]}`);
 
   return dedupe(candidates);
 }
@@ -266,7 +270,7 @@ export function evaluateRules(
   if (globalMatch) return { ...globalMatch, source: "global" };
 
   return {
-    action: projectConfig.defaultAction ?? globalConfig.defaultAction ?? DEFAULT_GLOBAL_CONFIG.defaultAction ?? "ask",
+    action: projectConfig.defaultAction ?? globalConfig.defaultAction ?? DEFAULT_GLOBAL_CONFIG.defaultAction ?? "allow",
     source: "default",
   };
 }
@@ -283,14 +287,35 @@ function displayCall(event: { toolName: string; input: Record<string, any>; cwd:
   return `${event.toolName} → ${target}`;
 }
 
+function updateStatus(
+  ctx: any,
+  enabled: boolean,
+  sessionRules: SessionRules,
+  projectConfig?: PermissionConfig,
+  globalConfig?: PermissionConfig,
+  sessionDefaultAction?: PermissionAction,
+): void {
+  const theme = ctx.ui.theme;
+  if (!enabled) {
+    ctx.ui.setStatus("claude-permissions", theme.fg("warning", "permissions:off"));
+    return;
+  }
+
+  ctx.ui.setStatus("claude-permissions", theme.fg("success", "permissions:on"));
+}
+
 function showSummary(
   ctx: any,
   paths: { global: string; project: string },
   sessionRules: SessionRules,
   projectConfig: PermissionConfig,
   globalConfig: PermissionConfig,
+  enabled: boolean,
+  sessionDefaultAction?: PermissionAction,
 ): void {
   const lines = [
+    `Permissions: ${enabled ? "enabled" : "disabled"}`,
+    `Session default: ${sessionDefaultAction ?? "(none)"}`,
     `Session allow/ask/deny: ${sessionRules.allow.length}/${sessionRules.ask.length}/${sessionRules.deny.length}`,
     `Project config: ${existsSync(paths.project) ? paths.project : "missing"}`,
     `Global config: ${existsSync(paths.global) ? paths.global : "missing"}`,
@@ -305,6 +330,15 @@ function showSummary(
 function showHelp(ctx: any, paths: { global: string; project: string }): void {
   ctx.ui.notify(
     [
+      "Commands:",
+      "- /permissions",
+      "- /permissions:on",
+      "- /permissions:off",
+      "- /permissions:ask",
+      "- /permissions:allow",
+      "- /permissions:deny",
+      "- /permissions:init",
+      "- /permissions:help",
       "Rule format:",
       "- tool_name",
       "- tool_name:target-pattern",
@@ -319,7 +353,10 @@ function showHelp(ctx: any, paths: { global: string; project: string }): void {
       "Config files:",
       `- Project: ${paths.project}`,
       `- Global: ${paths.global}`,
+      "Starter project config:",
+      JSON.stringify(STARTER_PROJECT_CONFIG, null, 2),
       "Notes:",
+      "- Create starter config with /permissions:init",
       "- Agent bash tool calls use tool_call hook",
       "- User ! / !! bash commands are not affected by this extension",
     ].join("\n"),
@@ -426,71 +463,115 @@ export function mutateSessionRule(sessionRules: SessionRules, action: Permission
 
 export default function toolPermissionsExtension(pi: ExtensionAPI) {
   const sessionRules: SessionRules = { allow: [], ask: [], deny: [] };
+  let enabled = true;
+  let sessionDefaultAction: PermissionAction | undefined;
+
+  function currentConfigs(ctx: any) {
+    const paths = buildPaths(ctx.cwd);
+    return {
+      paths,
+      globalConfig: readConfig(paths.global, DEFAULT_GLOBAL_CONFIG),
+      projectConfig: readConfig(paths.project),
+    };
+  }
+
+  function refreshStatus(ctx: any): void {
+    const { globalConfig, projectConfig } = currentConfigs(ctx);
+    updateStatus(ctx, enabled, sessionRules, projectConfig, globalConfig, sessionDefaultAction);
+  }
+
+  function setEnabled(ctx: any, next: boolean): void {
+    enabled = next;
+    refreshStatus(ctx);
+    ctx.ui.notify(next ? "Permissions on" : "Permissions off for this session", next ? "info" : "warning");
+  }
+
+  function setMode(ctx: any, mode: PermissionAction): void {
+    sessionDefaultAction = mode;
+    refreshStatus(ctx);
+    ctx.ui.notify(`Permission mode: ${mode} for this session`, "info");
+  }
+
+  function initProjectConfig(ctx: any, force = false): void {
+    const paths = buildPaths(ctx.cwd);
+    if (existsSync(paths.project) && !force) {
+      ctx.ui.notify(`Project permission config already exists: ${paths.project}\nUse /permissions:init force to overwrite.`, "warning");
+      return;
+    }
+    writeConfig(paths.project, STARTER_PROJECT_CONFIG);
+    refreshStatus(ctx);
+    ctx.ui.notify(`Created project permission config: ${paths.project}`, "info");
+  }
+
+  async function handlePermissionsCommand(args: string, ctx: any): Promise<void> {
+    const { paths, globalConfig, projectConfig } = currentConfigs(ctx);
+    const arg = args.trim().toLowerCase();
+
+    if (arg === "on") return setEnabled(ctx, true);
+    if (arg === "off") return setEnabled(ctx, false);
+    if (arg === "init") return initProjectConfig(ctx);
+    if (arg === "init force") return initProjectConfig(ctx, true);
+    if (arg === "help") return showHelp(ctx, paths);
+
+    if (arg.startsWith("mode ")) {
+      const mode = arg.slice("mode ".length).trim();
+      if (mode !== "allow" && mode !== "ask" && mode !== "deny") {
+        ctx.ui.notify("Usage: /permissions mode <allow|ask|deny>", "warning");
+        return;
+      }
+      return setMode(ctx, mode);
+    }
+
+    showSummary(ctx, paths, sessionRules, projectConfig, globalConfig, enabled, sessionDefaultAction);
+  }
+
+  const argumentCompletions = (prefix: string) => {
+    const items = ["on", "off", "mode allow", "mode ask", "mode deny", "init", "init force", "help"].map((value) => ({
+      value,
+      label: value,
+    }));
+    return items.filter((item) => item.value.startsWith(prefix));
+  };
 
   pi.registerCommand("permissions", {
     description: "Show tool permission config and session rules",
-    handler: async (args, ctx) => {
-      const paths = buildPaths(ctx.cwd);
-      const globalConfig = readConfig(paths.global, DEFAULT_GLOBAL_CONFIG);
-      const projectConfig = readConfig(paths.project);
-      const arg = args.trim().toLowerCase();
+    getArgumentCompletions: argumentCompletions,
+    handler: handlePermissionsCommand,
+  });
 
-      if (arg === "clear-session") {
-        sessionRules.allow.length = 0;
-        sessionRules.ask.length = 0;
-        sessionRules.deny.length = 0;
-        ctx.ui.notify("Cleared session permission rules", "info");
-        return;
-      }
+  pi.registerCommand("permissions:help", {
+    description: "Show permission help",
+    handler: async (_args, ctx) => showHelp(ctx, buildPaths(ctx.cwd)),
+  });
 
-      if (arg === "help") {
-        showHelp(ctx, paths);
-        return;
-      }
+  pi.registerCommand("permissions:init", {
+    description: "Create starter project permission config",
+    handler: async (args, ctx) => initProjectConfig(ctx, args.trim().toLowerCase() === "force"),
+  });
 
-      if (arg.startsWith("allow ") || arg.startsWith("ask ") || arg.startsWith("deny ")) {
-        const parsed = parseRuleMutationArgs(args);
-        if (!parsed) {
-          ctx.ui.notify("Usage: /permissions <allow|ask|deny> <session|project|global> <rule>", "warning");
-          return;
-        }
+  pi.registerCommand("permissions:on", {
+    description: "Enable permission checks for this session",
+    handler: async (_args, ctx) => setEnabled(ctx, true),
+  });
 
-        if (parsed.scope === "session") {
-          const changed = mutateSessionRule(sessionRules, parsed.action, parsed.rule, true);
-          ctx.ui.notify(changed ? `Added ${parsed.action} session rule: ${parsed.rule}` : `Rule already present: ${parsed.rule}`, "info");
-          return;
-        }
+  pi.registerCommand("permissions:off", {
+    description: "Disable permission checks for this session",
+    handler: async (_args, ctx) => setEnabled(ctx, false),
+  });
 
-        appendRule(parsed.scope === "project" ? paths.project : paths.global, parsed.action, parsed.rule, parsed.scope === "global" ? DEFAULT_GLOBAL_CONFIG : undefined);
-        ctx.ui.notify(`Added ${parsed.action} ${parsed.scope} rule: ${parsed.rule}`, "info");
-        return;
-      }
+  pi.registerCommand("permissions:allow", {
+    description: "Set permission fallback mode to allow for this session",
+    handler: async (_args, ctx) => setMode(ctx, "allow"),
+  });
 
-      if (arg.startsWith("remove ")) {
-        const parsed = parseRuleMutationArgs(arg.slice("remove ".length));
-        if (!parsed) {
-          ctx.ui.notify("Usage: /permissions remove <allow|ask|deny> <session|project|global> <rule>", "warning");
-          return;
-        }
+  pi.registerCommand("permissions:ask", {
+    description: "Set permission fallback mode to ask for this session",
+    handler: async (_args, ctx) => setMode(ctx, "ask"),
+  });
 
-        if (parsed.scope === "session") {
-          const changed = mutateSessionRule(sessionRules, parsed.action, parsed.rule, false);
-          ctx.ui.notify(changed ? `Removed ${parsed.action} session rule: ${parsed.rule}` : `Rule not found: ${parsed.rule}`, "info");
-          return;
-        }
-
-        const changed = removeRule(
-          parsed.scope === "project" ? paths.project : paths.global,
-          parsed.action,
-          parsed.rule,
-          parsed.scope === "global" ? DEFAULT_GLOBAL_CONFIG : undefined,
-        );
-        ctx.ui.notify(changed ? `Removed ${parsed.action} ${parsed.scope} rule: ${parsed.rule}` : `Rule not found: ${parsed.rule}`, "info");
-        return;
-      }
-
-      showSummary(ctx, paths, sessionRules, projectConfig, globalConfig);
-    },
+  pi.registerCommand("permissions:deny", {
+    description: "Set permission fallback mode to deny for this session",
+    handler: async (_args, ctx) => setMode(ctx, "deny"),
   });
 
   pi.on("session_start", (_event, ctx) => {
@@ -501,24 +582,29 @@ export default function toolPermissionsExtension(pi: ExtensionAPI) {
     const paths = buildPaths(ctx.cwd);
     const globalConfig = readConfig(paths.global, DEFAULT_GLOBAL_CONFIG);
     const projectConfig = readConfig(paths.project);
-    const defaultAction = projectConfig.defaultAction ?? globalConfig.defaultAction ?? "ask";
+    const defaultAction = projectConfig.defaultAction ?? globalConfig.defaultAction ?? "allow";
 
+    enabled = true;
+    sessionDefaultAction = undefined;
+    updateStatus(ctx, enabled, sessionRules, projectConfig, globalConfig, sessionDefaultAction);
     ctx.ui.notify(`claude-permissions: default=${defaultAction}, tool_search allowed`, "info");
   });
 
   pi.on("tool_call", async (event, ctx) => {
     const toolName = event.toolName;
     const input = (event.input ?? {}) as Record<string, any>;
-    if (toolName === "tool_search") return undefined;
+    if (!enabled) return undefined;
 
     const target = toolTarget({ toolName, input, cwd: ctx.cwd });
     const paths = buildPaths(ctx.cwd);
     const globalConfig = readConfig(paths.global, DEFAULT_GLOBAL_CONFIG);
     const projectConfig = readConfig(paths.project);
-    const decision = evaluateRules(sessionRules, projectConfig, globalConfig, toolName, target);
+    const effectiveProjectConfig = sessionDefaultAction ? { ...projectConfig, defaultAction: sessionDefaultAction } : projectConfig;
+    const decision = evaluateRules(sessionRules, effectiveProjectConfig, globalConfig, toolName, target);
     const callText = displayCall({ toolName, input, cwd: ctx.cwd });
     const exactRule = ruleFromCall({ toolName, input, cwd: ctx.cwd });
     const prompt = await promptForDecision(ctx, paths, sessionRules, decision, callText, exactRule);
+    updateStatus(ctx, enabled, sessionRules, projectConfig, globalConfig, sessionDefaultAction);
 
     if (prompt.allow) return undefined;
     return { block: true, reason: prompt.blockReason ?? "Cancelled by user" };

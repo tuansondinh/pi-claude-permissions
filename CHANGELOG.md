@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.3.0] - 2026-04-24
+
+### Features
+- Add footer status indicator for permission checks.
+- Add top-level `/permissions:*` commands for enabling, disabling, fallback modes, help, and starter config initialization.
+- Add `/permissions:init` to create starter project permission config.
+- Include starter config example in `/permissions:help`.
+
+### Other
+- Change default fallback behavior to `allow`.
+- Remove `tool_search` from extension defaults and built-in bypass so users can manage it in their own settings.
+- Remove manual rule mutation and clear-session commands from public command surface.
+
 ## [0.2.2] - 2026-04-23
 
 ### Bug Fixes

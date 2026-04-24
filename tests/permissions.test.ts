@@ -68,6 +68,18 @@ test("bash target unwraps RTK git wrapper for matching", () => {
   assert.equal(ruleMatches("bash:git push", "bash", target), true);
 });
 
+test("bash target unwraps RTK proxy wrapper for matching", () => {
+  const target = toolTarget({
+    toolName: "bash",
+    input: { command: 'RTK_DB_PATH="/tmp/history.db" rtk proxy npm publish --access public' },
+    cwd: "/tmp/project",
+  });
+
+  assert.equal(target.candidates.includes("rtk proxy npm publish --access public"), true);
+  assert.equal(target.candidates.includes("npm publish --access public"), true);
+  assert.equal(ruleMatches("bash:npm publish*", "bash", target), true);
+});
+
 test("evaluateRules uses deny before ask before allow within same source", () => {
   const target = toolTarget({
     toolName: "bash",
